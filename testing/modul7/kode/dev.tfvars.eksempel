@@ -1,0 +1,42 @@
+# =============================================================================
+#  dev.tfvars.eksempel  –  fila som ALDRI skal ligge i repoet
+# -----------------------------------------------------------------------------
+#  Uendret fra Oppgave 5. Den heter .eksempel, ikke .tfvars, nettopp fordi
+#  .gitignore stopper alt som heter *.tfvars.
+#
+#  Den ekte fila lager du lokalt, laster opp til Key Vault, og lar Git aldri se:
+#
+#      cp dev.tfvars.eksempel dev.tfvars      # rett shortname
+#      cp dev.tfvars.eksempel test.tfvars     # environment = "test", 10.20.0.0/16
+#      ./scripts/set-tfvars-secret.sh <kv-navn> tfvars-dev  ./dev.tfvars
+#      ./scripts/set-tfvars-secret.sh <kv-navn> tfvars-test ./test.tfvars
+#
+#  Har du gjort Oppgave 5, ligger tfvars-dev og tfvars-test der allerede.
+#  Det eneste Oppgave 6 trenger i tillegg, er prod – se prod.tfvars.eksempel.
+#
+#  Workflowen henter fila ned igjen som params.auto.tfvars. Alt som heter
+#  *.auto.tfvars leses automatisk av Terraform, uten -var-file.
+# =============================================================================
+
+# BYTT DENNE. Delt tenant – uten kortnavnet ditt kolliderer du med en medstudent.
+shortname = "tim"
+
+project = "oppg5"
+
+# Miljønavnet er en VERDI her, ikke et mappenavn. Det er hele K6 på én linje.
+# I test-varianten står det "test", og ingenting annet endrer seg.
+environment = "dev"
+
+location = "norwayeast"
+
+# Egne /16 per miljø, slik at de kan peeres den dagen de skal.
+#   dev  -> 10.10.0.0/16
+#   test -> 10.20.0.0/16
+address_space = "10.10.0.0/16"
+
+# navn => netnum. Nøkkelen er identiteten, netnum er adressen.
+subnets = {
+  web  = 0
+  app  = 1
+  data = 2
+}

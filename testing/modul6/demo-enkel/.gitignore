@@ -1,0 +1,21 @@
+# Lokal Terraform-tilstand skal aldri i Git.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# K5: DETTE er linja oppgaven måler.
+*.tfvars
+
+# Den stopper to filer på én gang: dev.tfvars som du lager lokalt, og
+# params.auto.tfvars som workflowen laster ned fra Key Vault under kjøring.
+#
+# Merk at .gitignore bare gjelder framover. Har en .tfvars vært committet én
+# gang, ligger den i historikken uansett, og der blir den til noen skriver
+# historikken om. Det er dette oppgaveteksten ser etter:
+#
+#   git log --all --diff-filter=A --name-only -- '*.tfvars'
+
+# MERK: .terraform.lock.hcl er IKKE med her – den SKAL versjoneres, slik at
+# runneren får nøyaktig samme providerversjon som maskinen din.

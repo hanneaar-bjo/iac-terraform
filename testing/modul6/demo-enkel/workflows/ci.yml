@@ -1,0 +1,152 @@
+# =============================================================================
+#  .github/workflows/ci.yml  –  STEG 1 og STEG 3
+# -----------------------------------------------------------------------------
+#  CI = kontroll av KODEN, før den slås sammen med main.
+#
+#  Kjører på hver pull request. To jobber, i denne rekkefølgen:
+#
+#    1. kontroll   fmt og validate – uten tilgang til Azure   (steg 1)
+#    2. plan-dev   plan mot dev, lagt som kommentar på PR-en  (steg 3)
+#
+#  Det finnes bare ÉN CI-fil, ikke én per miljø. fmt og validate gir samme svar
+#  uansett hvilket miljø koden skal til – de sjekker koden, ikke miljøet.
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    # Med vilje INGEN paths-filter. Begge jobbene er required status checks på
+    # main. Starter ikke workflowen, rapporterer ikke kontrollene inn, og PR-en
+    # venter for alltid på en hake som aldri kommer – for eksempel når PR-en
+    # bare legger til en ny workflow-fil.
+
+# Standard for alle jobbene i fila: bare lese koden. plan-dev gir seg selv mer
+# under – kontroll gjør det ikke.
+permissions:
+  contents: read
+
+# Pusher du tre commits til grenen, er bare den siste kjøringen interessant.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------- steg 1 -----
+  kontroll:
+    # Dette navnet er det du velger i branch protection (steg 2).
+    name: fmt og validate
+    runs-on: ubuntu-latest
+
+    # Ingen environment, ingen Azure/login, ingen secrets. Jobben trenger ikke
+    # nøkler for å sjekke formatering, og da skal den ikke ha dem.
+    steps:
+      - name: Hent koden
+        uses: actions/checkout@v5
+
+      - name: Installer Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.0
+
+      # -check retter ingenting, den bare feiler hvis noe er feilformatert.
+      # Det er det som gjør den til en port.
+      - name: Sjekk formatering
+        run: terraform fmt -check -recursive
+
+      # -backend=false: hent providerne, men ikke koble til state i Azure.
+      - name: Klargjør uten backend
+        working-directory: stacks/nettverk
+        run: terraform init -backend=false
+
+      - name: Valider koden
+        working-directory: stacks/nettverk
+        run: terraform validate
+
+  # ------------------------------------------------------------- steg 3 -----
+  plan-dev:
+    name: plan mot dev
+    # Mennesket skal ikke lese en plan for kode som ikke engang er formatert.
+    needs: kontroll
+    runs-on: ubuntu-latest
+
+    # Planen går alltid mot dev. test og prod nevnes ikke i denne fila.
+    environment: dev
+
+    # Denne jobben trenger mer enn standarden øverst:
+    permissions:
+      contents: read
+      id-token: write        # logge inn i Azure med OIDC
+      pull-requests: write   # skrive kommentaren på PR-en
+
+    defaults:
+      run:
+        working-directory: stacks/nettverk
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_INPUT: false
+      TF_IN_AUTOMATION: true
+
+    steps:
+      - name: Hent koden
+        uses: actions/checkout@v5
+
+      - name: Installer Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false   # ellers blir kommentaren full av støy
+
+      - name: Logg inn i Azure
+        uses: Azure/login@v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Hent parameterfila for dev
+        run: |
+          az keyvault secret show \
+            --vault-name "${{ secrets.KEYVAULT_NAME }}" \
+            --name "tfvars-dev" \
+            --query value -o tsv > params.auto.tfvars
+
+      - name: Init
+        run: |
+          terraform init \
+            -backend-config="${{ github.workspace }}/shared/backend.hcl" \
+            -backend-config="key=env/dev/nettverk.tfstate"
+
+      # -lock=false: planen skriver ingenting, så den skal ikke blokkere en
+      # utrulling som går samtidig. -no-color: ellers [0m[1m i kommentaren.
+      - name: Plan
+        run: terraform plan -lock=false -no-color -out=tfplan
+
+      - name: Legg planen som kommentar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Terraform plan mot dev"
+            echo
+            terraform show -no-color tfplan | grep -E '^(Plan:|No changes)' || true
+            echo
+            echo "<details><summary>Vis hele planen</summary>"
+            echo
+            echo '```terraform'
+            terraform show -no-color tfplan
+            echo '```'
+            echo
+            echo "</details>"
+          } > "${{ github.workspace }}/kommentar.md"
+
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file "${{ github.workspace }}/kommentar.md"
+
+      - name: Slett parameterfila
+        if: always()
+        run: rm -f params.auto.tfvars
