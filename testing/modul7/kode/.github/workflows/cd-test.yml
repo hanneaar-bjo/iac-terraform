@@ -1,0 +1,125 @@
+# =============================================================================
+#  .github/workflows/cd-test.yml  –  STEG 5
+# -----------------------------------------------------------------------------
+#  Utrulling til test. Nesten lik cd-dev.yml – sammenlign dem linje for linje.
+#  Det som skiller:
+#
+#    * Den starter IKKE av seg selv. Du starter den med «Run workflow».
+#    * Du sier hvilken commit som skal ut, ved å lime inn en SHA.
+#    * Den sjekker at commiten ligger på main før noe rører Azure.
+#
+#  Å lime inn SHA-en fra dev-kjøringen er PROMOTERING: du flytter noe som
+#  allerede har vært i dev, uendret videre. Ingen ny kode kan snike seg med.
+# =============================================================================
+
+name: CD test
+
+run-name: test ← ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Hele commit-SHA-en fra en vellykket dev-kjøring
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: nettverk-test
+  cancel-in-progress: false
+
+jobs:
+  rull-ut:
+    runs-on: ubuntu-latest
+    environment: test
+
+    defaults:
+      run:
+        working-directory: stacks/nettverk
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_INPUT: false
+      TF_IN_AUTOMATION: true
+
+    steps:
+      # NYTT: hent akkurat den commiten du ba om, ikke det nyeste på main.
+      # fetch-depth: 0 henter hele historikken, så neste steg kan sjekke den.
+      - name: Hent commiten som skal promoteres
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      # NYTT: en commit fra en gren som aldri ble merget, har ikke vært gjennom
+      # CI, pull request eller dev. Den stoppes her.
+      #
+      # SHA-en går via env:, ikke rett inn i kommandoen. Den er skrevet inn av
+      # et menneske, og tekst fra et menneske limes aldri rett inn i skallet.
+      - name: Sjekk at commiten ligger på main
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$SHA ligger ikke på main. Bare commits som er merget, kan promoteres."
+            exit 1
+          fi
+          echo "OK: $SHA ligger på main."
+
+      - name: Installer Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Logg inn i Azure
+        uses: Azure/login@v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Hent parameterfila for test
+        run: |
+          az keyvault secret show \
+            --vault-name "${{ secrets.KEYVAULT_NAME }}" \
+            --name "tfvars-test" \
+            --query value -o tsv > params.auto.tfvars
+
+      - name: Init
+        run: |
+          terraform init \
+            -backend-config="${{ github.workspace }}/shared/backend.hcl" \
+            -backend-config="key=env/test/nettverk.tfstate"
+
+      - name: Plan
+        run: terraform plan -out=tfplan
+
+      - name: Apply
+        run: terraform apply tfplan
+
+      - name: Slett parameterfila
+        if: always()
+        run: rm -f params.auto.tfvars
+
+      - name: Skriv oppsummering
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          {
+            echo "## ✅ Test er oppdatert"
+            echo
+            echo "Promotert commit:"
+            echo
+            echo '```'
+            echo "$SHA"
+            echo '```'
+            echo
+            echo "**Neste steg:** Actions → *CD prod* → *Run workflow* → lim inn den samme SHA-en."
+          } >> "$GITHUB_STEP_SUMMARY"

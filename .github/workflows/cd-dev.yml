@@ -1,0 +1,114 @@
+# =============================================================================
+#  .github/workflows/cd-dev.yml  –  STEG 4
+# -----------------------------------------------------------------------------
+#  CD = utrulling til ETT miljø. Denne fila er dev.
+#
+#  Dette er deploy-nettverk.yml fra Oppgave 5 med nytt navn og tre endringer:
+#
+#    1. run-name viser commit-SHA-en i Actions-lista
+#    2. plan lagrer planen (-out=tfplan), og apply kjører den lagrede planen
+#    3. et siste steg skriver SHA-en i oppsummeringen, klar til å kopieres
+#
+#  Starter av seg selv når noe merges til main. Det er det eneste miljøet som
+#  gjør det – test og prod må du starte selv, med en SHA som har vært her.
+# =============================================================================
+
+name: CD dev
+
+# Navnet på hver kjøring i Actions-lista. Uten denne står commit-meldingen der.
+# Med den ser du med en gang HVILKEN commit som ble rullet ut.
+run-name: dev ← ${{ github.sha }}
+
+on:
+  push:
+    branches: [main]
+    # Stiene regnes fra repo-rota. Her kan du ikke bruke variabler, så heter
+    # mappa di noe annet enn terraform-projects, skriver du navnet rett inn.
+    paths:
+      - 'terraform-projects/stacks/nettverk/**'
+      - 'terraform-projects/modules/network/**'
+      - 'terraform-projects/shared/backend.hcl'
+      - '.github/workflows/cd-dev.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+# Én utrulling til dev om gangen. En påbegynt apply skal aldri avbrytes.
+concurrency:
+  group: nettverk-dev
+  cancel-in-progress: false
+
+jobs:
+  rull-ut:
+    runs-on: ubuntu-latest
+    environment: dev
+
+    defaults:
+      run:
+        working-directory: terraform-projects/stacks/nettverk
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_INPUT: false
+      TF_IN_AUTOMATION: true
+
+    steps:
+      - name: Hent koden
+        uses: actions/checkout@v5
+
+      - name: Installer Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Logg inn i Azure
+        uses: Azure/login@v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Hent parameterfila for dev
+        run: |
+          az keyvault secret show \
+            --vault-name "${{ secrets.KEYVAULT_NAME }}" \
+            --name "tfvars-dev" \
+            --query value -o tsv > params.auto.tfvars
+
+      - name: Init
+        run: |
+          terraform init \
+            -backend-config="${{ github.workspace }}/terraform-projects/shared/backend.hcl" \
+            -backend-config="key=env/dev/nettverk.tfstate"
+
+      # Planen lagres i en fil ...
+      - name: Plan
+        run: terraform plan -out=tfplan
+
+      # ... og apply kjører akkurat den fila. Ingen -auto-approve: Terraform
+      # spør bare «er du sikker?» når den selv må lage en ny plan.
+      - name: Apply
+        run: terraform apply tfplan
+
+      - name: Slett parameterfila
+        if: always()
+        run: rm -f params.auto.tfvars
+
+      # Det du trenger til neste steg, på kjøringens forside.
+      - name: Skriv oppsummering
+        run: |
+          {
+            echo "## ✅ Dev er oppdatert"
+            echo
+            echo "Rullet ut commit:"
+            echo
+            echo '```'
+            echo "${{ github.sha }}"
+            echo '```'
+            echo
+            echo "**Neste steg:** Actions → *CD test* → *Run workflow* → lim inn SHA-en over."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,33 @@
+# =============================================================================
+#  prod.tfvars.eksempel  –  den ene parameterfila Oppgave 6 trenger i tillegg
+# -----------------------------------------------------------------------------
+#  Oppgave 5 stoppet på dev og test, så tfvars-prod finnes ikke i Key Vault
+#  når du begynner her. «Før du begynner», punkt 1:
+#
+#      cp prod.tfvars.eksempel prod.tfvars    # rett shortname
+#      ./scripts/set-tfvars-secret.sh <kv-navn> tfvars-prod ./prod.tfvars
+#
+#  Sammenlign med dev.tfvars.eksempel. To verdier er ulike, og ingen linje kode.
+#  Det er hele påstanden fra Oppgave 5: miljøet er en parameter.
+# =============================================================================
+
+# BYTT DENNE. Samme kortnavn som i dev og test.
+shortname = "tim"
+
+# Samme som i dev og test. Endrer du den her, får prod et annet navnemønster
+# enn de to andre – og en endring av project i et miljø som allerede finnes,
+# river ned og bygger opp alt på nytt.
+project = "oppg5"
+
+environment = "prod"
+
+location = "norwayeast"
+
+# Eget /16, slik at prod aldri overlapper med dev (10.10) eller test (10.20).
+address_space = "10.30.0.0/16"
+
+subnets = {
+  web  = 0
+  app  = 1
+  data = 2
+}
